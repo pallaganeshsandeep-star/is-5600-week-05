@@ -1,49 +1,96 @@
-const fs = require('fs').promises
-const path = require('path')
+const cuid = require('cuid')
+const { mongoose } = require('./db')
 
-const productsFile = path.join(__dirname, 'data/full-products.json')
-
-/**
- * List products
- * @param {*} options 
- * @returns 
- */
-async function list(options = {}) {
-
-  const { offset = 0, limit = 25, tag } = options;
-
-  const data = await fs.readFile(productsFile)
-  return JSON.parse(data)
-    .filter(product => {
-      if (!tag) {
-        return product
-      }
-
-      return product.tags.find(({ title }) => title == tag)
-    })
-    .slice(offset, offset + limit) // Slice the products
-}
-
-/**
- * Get a single product
- * @param {string} id
- * @returns {Promise<object>}
- */
-async function get(id) {
-  const products = JSON.parse(await fs.readFile(productsFile))
-
-  // Loop through the products and return the product with the matching id
-  for (let i = 0; i < products.length; i++) {
-    if (products[i].id === id) {
-      return products[i]
+const productSchema = new mongoose.Schema({
+  _id: {
+    type: String
+  },
+  tags: [{ title: String }]
+}, {
+  strict: false,
+  timestamps: true,
+  toJSON: {
+    virtuals: true,
+    versionKey: false,
+    transform: (doc, ret) => {
+      ret.id = ret._id
+      delete ret._id
+      return ret
     }
+  },
+  toObject: {
+    virtuals: true
+  }
+})
+const Product = mongoose.models.Product || mongoose.model('Product', productSchema)
+
+function normalize(product) {
+  if (!product) {
+    return null
   }
 
-  // If no product is found, return null
-  return null;
+  if (typeof product.toObject === 'function') {
+    return product.toObject({ virtuals: true })
+  }
+
+  if (product._id) {
+    product.id = product.id || product._id
+    delete product._id
+  }
+
+  return product
+}
+  async function list(options = {}) {
+  const { offset = 0, limit = 25, tag } = options
+  const filter = tag ? { 'tags.title': tag } : {}
+   const results = await Product.find(filter)
+    .skip(Number(offset))
+    .limit(Number(limit))
+    .lean({ virtuals: true })
+    .exec()
+      return results.map(normalize)
 }
 
+async function get(id) {
+const product = await Product.findById(id)
+    .lean({ virtuals: true })
+    .exec()
+  return normalize(product)
+}
+
+async function create(data) {
+  const product = new Product({
+    _id: data.id || data._id || cuid(),
+    ...data
+  })
+
+  await product.save()
+  return normalize(product)
+}
+
+async function edit(id, changes) {
+  const update = { ...changes }
+  delete update.id
+  delete update._id
+
+  const product = await Product.findByIdAndUpdate(id, update, {
+    new: true,
+    runValidators: true
+  })
+    .lean({ virtuals: true })
+    .exec()
+
+  return normalize(product)
+}
+
+ async function destroy(id) {
+  const result = await Product.deleteOne({ _id: id }).exec()
+  return result.deletedCount === 1
+ }
 module.exports = {
   list,
-  get
+   get,
+  create,
+  edit,
+  destroy
 }
